@@ -1,168 +1,198 @@
 using UnityEngine;
 
-[RequireComponent(typeof(Rigidbody))]
 public class PlaneController : MonoBehaviour
 {
-    [Header("Engine")]
-    public float maxThrust = 8000f;
-    public float throttleRampSpeed = 0.4f;
+    [Header("Aircraft Specifications")]
+    public float mass = 950f;
+    public float maxThrust = 15000f;
+    public float wingArea = 16.2f;
 
-    [Header("Aerodynamics")]
-    public float liftMultiplier = 2.8f;
-    public float dragMultiplier = 1.2f;
-    public float stallAngle = 20f;
-    public float minLiftSpeed = 25f;
+    [Header("Aerodynamic Coefficients")]
+    public float CL0 = 0.3f;
+    public float CLaPerDeg = 0.08f;
+    public float CLmax = 1.4f;
+    public float CLmin = -0.5f;
+    public float CD0 = 0.02f;
+    public float CDi = 0.03f;
 
     [Header("Control Surfaces")]
-    public float pitchTorque = 6000f;
-    public float rollTorque = 5000f;
-    public float yawTorque = 2000f;
+    public float pitchRate = 50f;
+    public float rollRate = 60f;
+    public float yawRate = 25f;
 
-    [Header("Ground")]
-    public float brakeForce = 4000f;
-    public LayerMask groundMask;
+    [Header("Ground Handling")]
+    public float groundDrag = 0.001f;
+    public float brakeForce = 8000f;
+    public float wheelHeight = 1.5f;
+    public float minFlySpeed = 25f;
 
-    [Header("Fuel")]
-    public float fuelCapacity = 100f;
-    public float fuelBurnRate = 0.6f;
+    [Header("Input")]
+    public float throttle = 0f;
 
-    [Header("Live Readouts (read only)")]
-    [SerializeField] private float throttlePct;
-    [SerializeField] private float airspeedKnots;
-    [SerializeField] private float altitudeFeet;
-    [SerializeField] private float aoaDegrees;
-    [SerializeField] private bool engineAlive = true;
-    [SerializeField] private bool isGrounded;
+    private const float airDensity = 1.225f;
+    private const float gravity = 9.81f;
 
     private Rigidbody rb;
-    private float throttle = 0f;
-    private float fuelRemaining;
+    private bool isGrounded = false;
+    private float currentAoA = 0f;
+    private float currentCL = 0f;
+    private float currentLift = 0f;
+
+    public float GetThrottle() { return throttle; }
+    public float GetAoA() { return currentAoA; }
+    public float GetLift() { return currentLift; }
+    public float GetSpeed() { return rb.linearVelocity.magnitude; }
+    public float GetAltitude() { return transform.position.y; }
+    public Vector3 GetVelocity() { return rb.linearVelocity; }
 
     void Start()
     {
         rb = GetComponent<Rigidbody>();
-        rb.mass = 650f;
-        rb.linearDamping = 0.02f;
-        rb.angularDamping = 2.5f;
-        rb.maxAngularVelocity = 3f;
-        rb.centerOfMass = new Vector3(0, 0, 0.5f);
-        fuelRemaining = fuelCapacity;
-        Debug.Log("Forward: " + transform.forward + " Up: " + transform.up + " Right: " + transform.right);
+        rb.mass = mass;
+        rb.useGravity = true;
+        rb.linearDamping = 0f;
+        rb.angularDamping = 0.5f;
     }
 
     void Update()
     {
-      HandleThrottle();
-        UpdateReadouts();
+        HandleInput();
     }
 
     void FixedUpdate()
     {
-        isGrounded = CheckGrounded();
+        rb.linearDamping = 0f;
+
+        CheckGrounded();
+
+        float speed = rb.linearVelocity.magnitude;
+
+        CalculateAoA(speed);
+
+        // ONLY apply lift if going fast enough
+        if (speed > minFlySpeed)
+        {
+            ApplyLift(speed);
+        }
+
+        if (speed > 1f)
+        {
+            ApplyDrag(speed);
+        }
+
         ApplyThrust();
-        ApplyAerodynamics();
-        ApplyControlSurfaces();
-        ApplyBrakes();
-        
-        throttle = Mathf.MoveTowards(throttle, 1f, throttleRampSpeed * Time.fixedDeltaTime);
+
+        if (isGrounded)
+        {
+            ApplyGroundForces();
+        }
+
+        float speed_mph = speed * 2.237f;
+        Debug.Log($"SPD:{speed_mph:F0}mph AOA:{currentAoA:F1} CL:{currentCL:F2} LIFT:{currentLift:F0} GND:{isGrounded}");
     }
 
-    void HandleThrottle()
+    void HandleInput()
     {
+        if (Input.GetKey(KeyCode.LeftShift))
+            throttle = Mathf.Clamp01(throttle + Time.deltaTime * 2f);
+        if (Input.GetKey(KeyCode.LeftControl))
+            throttle = Mathf.Clamp01(throttle - Time.deltaTime * 2f);
 
-        if (Input.GetKey(KeyCode.T)) throttle = Mathf.MoveTowards(throttle, 1f, throttleRampSpeed * Time.deltaTime);
-        if (Input.GetKey(KeyCode.G)) throttle = Mathf.MoveTowards(throttle, 0f, throttleRampSpeed * Time.deltaTime);
-        Debug.Log("Throttle: " + throttle);
+        float pitch = 0f;
+        if (Input.GetKey(KeyCode.W)) pitch = 1f;
+        if (Input.GetKey(KeyCode.S)) pitch = -1f;
+
+        float roll = 0f;
+        if (Input.GetKey(KeyCode.Q)) roll = 1f;
+        if (Input.GetKey(KeyCode.E)) roll = -1f;
+
+        float yaw = 0f;
+        if (Input.GetKey(KeyCode.A)) yaw = -1f;
+        if (Input.GetKey(KeyCode.D)) yaw = 1f;
+
+        Vector3 rotation = new Vector3(
+            pitch * pitchRate * Time.deltaTime,
+            yaw * yawRate * Time.deltaTime,
+            roll * rollRate * Time.deltaTime
+        );
+
+        transform.Rotate(rotation, Space.Self);
+    }
+
+    void CalculateAoA(float speed)
+    {
+        if (speed < 1f)
+        {
+            currentAoA = 0f;
+            return;
+        }
+
+        // Get velocity direction
+        Vector3 velDir = rb.linearVelocity.normalized;
+
+        // AoA is angle between velocity and forward, measured in pitch plane
+        // Use Dot product for a simpler, more reliable calculation
+        float forwardDot = Vector3.Dot(velDir, transform.forward);
+        float upDot = Vector3.Dot(velDir, transform.up);
+
+        // Calculate AoA using atan2 for proper quadrant handling
+        currentAoA = Mathf.Atan2(-upDot, forwardDot) * Mathf.Rad2Deg;
+
+        // Clamp to reasonable range
+        currentAoA = Mathf.Clamp(currentAoA, -30f, 30f);
+    }
+
+    void ApplyLift(float speed)
+    {
+        currentCL = CL0 + CLaPerDeg * currentAoA;
+        currentCL = Mathf.Clamp(currentCL, CLmin, CLmax);
+
+        float dynamicPressure = 0.5f * airDensity * speed * speed;
+        currentLift = dynamicPressure * wingArea * currentCL;
+
+        // Lift acts perpendicular to velocity, in the "up" direction of the plane
+        // Use transform.up for simplicity - this is good enough for most flight
+        Vector3 liftForce = transform.up * currentLift;
+
+        rb.AddForce(liftForce);
+    }
+
+    void ApplyDrag(float speed)
+    {
+        float CD = CD0 + CDi * currentCL * currentCL;
+        float dynamicPressure = 0.5f * airDensity * speed * speed;
+        float dragMagnitude = dynamicPressure * wingArea * CD;
+        rb.AddForce(-rb.linearVelocity.normalized * dragMagnitude);
     }
 
     void ApplyThrust()
     {
-        if (!engineAlive) return;
-        if (fuelRemaining <= 0f) { engineAlive = false; return; }
-
-        // transform.up is forward for this plane's orientation
-        rb.AddForce(transform.forward * throttle * maxThrust, ForceMode.Force); Debug.Log("Force: " + (-transform.forward * throttle * maxThrust));
-
-        fuelRemaining -= (throttle * fuelBurnRate * Time.fixedDeltaTime) / 60f;
-        fuelRemaining = Mathf.Max(fuelRemaining, 0f);
+        rb.AddForce(transform.forward * maxThrust * throttle);
     }
 
-    void ApplyAerodynamics()
+    void CheckGrounded()
     {
-        float airspeed = rb.linearVelocity.magnitude;
-        if (airspeed < 0.5f) return;
-        if (isGrounded) return;
-
-        // AoA calculated against transform.up (our actual forward)
-        Vector3 localVel = transform.InverseTransformDirection(rb.linearVelocity);
-        float aoa = Mathf.Atan2(-localVel.z, localVel.y) * Mathf.Rad2Deg;
-        aoaDegrees = aoa;
-
-        float absAoa = Mathf.Abs(aoa);
-        float stallFactor = Mathf.Clamp01(1f - Mathf.InverseLerp(stallAngle * 0.6f, stallAngle, absAoa));
-
-        float speedFactor = Mathf.Clamp01((airspeed - minLiftSpeed) / minLiftSpeed);
-        float weight = rb.mass * Mathf.Abs(Physics.gravity.y);
-        float lift = weight * speedFactor * stallFactor * liftMultiplier;
-
-        // Lift acts perpendicular to forward — which is -transform.forward in this orientation
-        rb.AddForce(-transform.forward * lift, ForceMode.Force);
-
-        float aoaDragFactor = 1f + (absAoa / stallAngle);
-        float drag = dragMultiplier * airspeed * airspeed * aoaDragFactor * 0.04f;
-        rb.AddForce(-rb.linearVelocity.normalized * drag, ForceMode.Force);
+        isGrounded = Physics.Raycast(transform.position, Vector3.down, wheelHeight + 0.1f);
     }
 
-    void ApplyControlSurfaces()
+    void ApplyGroundForces()
     {
-        float airspeed = rb.linearVelocity.magnitude;
-        float effectiveness = Mathf.Clamp01(airspeed / 35f);
+        if (rb.linearVelocity.magnitude > 0.1f)
+        {
+            Vector3 friction = -rb.linearVelocity.normalized * groundDrag * mass * gravity;
+            rb.AddForce(friction);
 
-        // Pitch W/S — rotates around right axis
-        float pitch = 0f;
-        if (Input.GetKey(KeyCode.W)) pitch = -1f;
-        if (Input.GetKey(KeyCode.S)) pitch = 1f;
-        rb.AddTorque(transform.right * pitch * pitchTorque * effectiveness, ForceMode.Force);
+            if (Input.GetKey(KeyCode.B))
+            {
+                rb.AddForce(-rb.linearVelocity.normalized * brakeForce);
+            }
+        }
 
-        // Roll Q/E — rotates around up axis (our actual forward)
-        float roll = 0f;
-        if (Input.GetKey(KeyCode.Q)) roll = 1f;
-        if (Input.GetKey(KeyCode.E)) roll = -1f;
-        rb.AddTorque(transform.up * roll * rollTorque * effectiveness, ForceMode.Force);
-
-        // Yaw A/D — rotates around forward axis (which is -transform.forward here)
-        float yaw = 0f;
-        if (Input.GetKey(KeyCode.A)) yaw = -1f;
-        if (Input.GetKey(KeyCode.D)) yaw = 1f;
-        rb.AddTorque(-transform.forward * yaw * yawTorque * effectiveness, ForceMode.Force);
-
-        // Adverse yaw
-        rb.AddTorque(-transform.forward * (-roll * 0.3f) * yawTorque * effectiveness, ForceMode.Force);
-
-        // Banked turn
-        float bankAmount = Vector3.Dot(transform.right, Vector3.up);
-        rb.AddTorque(transform.forward * bankAmount * 500f, ForceMode.Force);
-    }
-
-    void ApplyBrakes()
-    {
-        if (!isGrounded) return;
-        if (!Input.GetKey(KeyCode.B)) return;
-
-        Vector3 brakeDir = -rb.linearVelocity;
-        brakeDir.y = 0f;
-        rb.AddForce(brakeDir.normalized * brakeForce, ForceMode.Force);
-    }
-
-    bool CheckGrounded()
-    {
-        return Physics.Raycast(transform.position, Vector3.down, 2f, groundMask);
-    }
-
-    void UpdateReadouts()
-    {
-        throttlePct = throttle * 100f;
-        airspeedKnots = rb.linearVelocity.magnitude * 1.944f;
-        altitudeFeet = transform.position.y * 3.281f;
+        Vector3 euler = transform.eulerAngles;
+        if (euler.x > 180) euler.x -= 360;
+        if (euler.z > 180) euler.z -= 360;
+        euler.x = Mathf.Clamp(euler.x, -5f, 15f);
+        euler.z = Mathf.Lerp(euler.z, 0f, Time.fixedDeltaTime * 5f);
+        transform.eulerAngles = euler;
     }
 }

@@ -9,6 +9,16 @@
     "C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.10f1\\Editor\\Data\\Resources\\PackageManager\\BuiltInPackages\\BuiltInPackagesCombined.sha1"
   ],
   "outputs": {
+    "com.unity.cinemachine@2.10.5": {
+      "name": "com.unity.cinemachine",
+      "displayName": "Cinemachine",
+      "resolvedPath": "C:\\Users\\meyer\\PlanePrototype\\Library\\PackageCache\\com.unity.cinemachine@f26b20ca78a2",
+      "fingerprint": "f26b20ca78a20c5aad4f868def38fc66fc1c24de",
+      "editorCompatibility": "2022.3.0a1",
+      "version": "2.10.5",
+      "source": "registry",
+      "testable": false
+    },
     "com.unity.collab-proxy@2.11.3": {
       "name": "com.unity.collab-proxy",
       "displayName": "Unity Version Control",

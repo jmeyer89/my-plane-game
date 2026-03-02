@@ -67,6 +67,9 @@ MonoBehaviour:
   - groupType: UnityEngine.LineRenderer, UnityEngine.CoreModule, Version=0.0.0.0,
       Culture=neutral, PublicKeyToken=null
     collapsed: 0
+  - groupType: Cinemachine.CinemachineVirtualCameraBase, Cinemachine, Version=0.0.0.0,
+      Culture=neutral, PublicKeyToken=null
+    collapsed: 0
   m_LastPivotModeTypeString: UnityEditor.CenterPivotMode, UnityEditor.CoreModule,
     Version=0.0.0.0, Culture=neutral, PublicKeyToken=null
   m_LastPivotRotationTypeString: UnityEditor.LocalPivotRotation, UnityEditor.CoreModule,
